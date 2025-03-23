@@ -1,0 +1,45 @@
+# Código de JAGS para un modelo de regresión poisson con 
+# liga logarítmica
+
+model {
+  # y: Número de billetes falsos
+  # C: Número de billetes en circulacion
+  # p: Probabilidad de que un billete sea falso (pi en el ejercicio)
+
+  # Verosimilitud
+  for (i in 1:n) {
+    y[i] ~ dpois(lambda[i])
+    
+    # Liga logarítmica
+    log(lambda[i]) <- alpha +
+      beta[1]*x20[i] +
+      beta[2]*x50[i] +
+      beta[3]*x100[i] +
+      beta[4]*x200[i] +
+      beta[5]*x500[i]
+
+    # Predicción
+    yf[i] ~ dpois(lambda[i])
+  }
+
+  # Priors
+  # alpha
+  alpha ~ dnorm(0, 0.001)
+  
+  #beta
+  for (j in 1:5) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+
+  # tasa de falsificación
+  for (j in 1:5) {
+  lambda_denom[j] <- exp(alpha.est + beta.est[j])
+  tasa[j] <- 1000 * lambda_denom[j] / C_denom[j]
+  }
+
+  # Restricciones de estimabilidad
+  alpha.est <- alpha + mean(beta[])
+  for (j in 1:5) {
+    beta.est[j] <- beta[j] - mean(beta[])
+  }
+}

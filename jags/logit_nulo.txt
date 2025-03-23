@@ -1,0 +1,19 @@
+# MODELO NULO: Código de JAGS para un modelo de regresión binomial con 
+# liga logística
+
+model {
+  # y: Número de billetes falsos
+  # C: Número de billetes en circulacion
+  # p: Probabilidad de que un billete sea falso (pi en el ejercicio)
+
+  # Verosimilitud
+  for (i in 1:n) {
+    y[i] ~ dbin(p[i], C[i])
+    
+    # Liga logística
+    logit(p[i]) <- alpha
+  }
+
+  # Priors
+  alpha ~ dnorm(0, 0.001)
+}

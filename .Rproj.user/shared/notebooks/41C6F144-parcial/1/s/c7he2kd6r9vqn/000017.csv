@@ -1,0 +1,4 @@
+"0","# Scatterplot"
+"0","ggplot(datos, aes(x = C, y = Y, color = factor(denom))) +"
+"0","  geom_point() + "
+"0","  labs(x = ""Billetes en circulación"", y = ""Billetes falsos"")"

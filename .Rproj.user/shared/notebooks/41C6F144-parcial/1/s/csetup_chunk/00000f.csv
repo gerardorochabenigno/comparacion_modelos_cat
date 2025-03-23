@@ -1,0 +1,7 @@
+"0","knitr::opts_chunk$set(echo = FALSE)"
+"0","rm(list=ls())"
+"0","library(R2jags)"
+"0","library(ggplot2)"
+"0","library(tidyverse)"
+"0","library(gt)"
+"0","library(patchwork)"

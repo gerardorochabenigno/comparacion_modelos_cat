@@ -1,0 +1,4 @@
+"0","# Evolución del número de billetes falsos en circulación"
+"0","ggplot(datos, aes(x = Year, y = Y/C, color =factor(denom))) +"
+"0","  geom_line() + geom_point() + "
+"0","  labs(x = ""Año"", y = ""Porcentaje"")"

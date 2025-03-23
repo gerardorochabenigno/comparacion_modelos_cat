@@ -1,0 +1,4 @@
+"0","tasas_sum <- tasas |> select(c(""Denominación"", ""Percentil.2.5."", ""Percentil.97.5.""))"
+"0",""
+"0","gt(tasas_sum) |>"
+"0","  tab_header(title = ""Tabla 8. Intervalos de credibilidad el número de billetes falsos por cada mil billetes en circulación"")"

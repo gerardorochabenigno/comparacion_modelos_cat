@@ -1,0 +1,745 @@
+---
+title: "Examen Parcial - Métodos Lineales Generalizados"
+author: "Gerardo Rocha Benigno"
+date: "2025-03-22"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: true
+    includes:
+      in_header: preambulo.tex
+    citation_package: natbib
+bibliography: bibliografia.bib
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+rm(list=ls())
+library(R2jags)
+library(ggplot2)
+library(tidyverse)
+library(gt)
+library(patchwork)
+```
+
+## 1. Contexto
+
+El Banco de México es el responsable de emitir los billetes que circulan en la economía mexicana. Se cuenta con la información del número de billetes en circulación (C) y la cantidad de billetes falsos (Y), ambas en millones de piezas, para los años de 2000 a 2011. Para identificar la denominación del billete definimos variables indicadoras x20, x50, x100, x200 y x500.
+
+```{r, echo=FALSE, include=FALSE}
+datos <- read.csv("http://gente.itam.mx/lnieto/index_archivos/BillsMXc.csv")
+```
+
+## 2. Análisis exploratorio
+
+**a) Realiza un análisis exploratorio de los datos. Crea gráficas y encuentra las estadísticas que mejor describan la información y comentalas. Obten conclusiones por tipo de información.**
+
+En el Gráfico 1 es posible observar que el número de billetes en circulación para todas las denominaciones presentó una tendencia creciente entre los años 2000 a 2011, con el número de billetes de 500 pesos exhibiendo el mayor crecimiento, ya que el núemro de billetes de esta denopminación fue el menor en 2000 pero el mayor en 2011.
+
+Por su parte, dependiendiendo de la denminación de los billetes, presentaron tendencias heterogeneas. Por ejemplo, el número de billetes de 20 y 100 pesos presentaron una tendencia decreciente, mientras que el número de billetes de 200 y 500 pesos presentaron una tendencia creciente; el número de billetes falsos en circulación de 50 pesos no presentó una tendencia clara.
+
+
+```{r grafico1, fig.cap="Evolución de los billetes en circulación", fig.width=13, fig.height=6, echo=FALSE}
+# Evolución del número de billetes en circulación
+datos$denom <- ifelse(datos$x20 == 1, 20, 0)
+datos$denom <- ifelse(datos$x50 == 1, 50, datos$denom)
+datos$denom <- ifelse(datos$x100 == 1, 100, datos$denom)
+datos$denom <- ifelse(datos$x200 == 1, 200, datos$denom)
+datos$denom <- ifelse(datos$x500 == 1, 500, datos$denom)
+
+g1 <- ggplot(datos, aes(x = Year, y = C, color =factor(denom))) +
+  geom_line() + geom_point() + 
+  labs(title = "Billetes en circulación", x = "Año", y = "Millones de piezas") 
+
+g2 <- ggplot(datos, aes(x = Year, y = Y, color =factor(denom))) +
+  geom_line() + geom_point() + 
+  labs(title = "Billetes falsos en circulación", x = "Año", y = "Millones de piezas")
+
+(g1 + g2)
+
+```
+
+
+Como porcentaje del número total de billetes en circulación, la proporción de billetes falsos de 20, 100 y 500 pesos decreció, mientras que la proporción de billetes falsos de 50 y 200 pesos no presentó una tendencia clara.
+
+
+```{r grafico2, fig.cap="Evolución de los billetes falsos", fig.width=5, fig.height=2.5, echo=FALSE}
+# Evolución del número de billetes falsos en circulación
+ggplot(datos, aes(x = Year, y = Y/C, color =factor(denom))) +
+  geom_line() + geom_point() + 
+  labs(x = "Año", y = "Porcentaje")
+```
+
+**Relación entre número total de billetes y número de billetes falsos en circulación**
+
+Para el billete de 500 pesos se de una relación positiva entre el número de billetes en circulación y el número de billetes falsos en circulación; este mismo patrón se observa con el billete de 100 pesos. Para el billete de denominación de 20 pesos se observa una relación negativa. Para el billete de 50 y 100 pesos no es posible observar una tendencia clara.
+
+```{r grafico3, fig.cap="Relación entre número total de billetes y billetes falsos en circulación", fig.width=5, fig.height=2.5, echo=FALSE}
+# Scatterplot
+ggplot(datos, aes(x = C, y = Y, color = factor(denom))) +
+  geom_point() + 
+  labs(x = "Billetes en circulación", y = "Billetes falsos")
+```
+
+## 3. Modelado
+
+Ignorando la dependencia temporal que pudiera existir entre las observaciones de distintos años, considera un modelo de regresión binomial de la forma:
+$$Y_i \sim Binomial(C_i, \pi_i)$$
+para $i=1,...,60$, y define el siguiente predictor líneal:
+$$\eta_i = \alpha +\beta_1x20_i+\beta_2x50_i+\beta_3x100_i+\beta_4x200_i+\beta_5x500_i$$
+Incluye alguna restricción de estimabilidad adecuada, ya sea
+  i. $(i)~\alpha=0$,
+  ii. $(ii)~\beta_j=0$ para algún $j=1,...,5$ o,
+  iii. $(iii)~\sum_{j=1}^5\beta_j=0$.
+
+Queremos comparar el desempeño del modelo con dos funciones liga, la logística y la complementaria log-log.
+
+**b) Ajuste el modelo de regresión binomial con liga logística, i.e., $logit(\pi_i)=\eta$ 𝑖 y usa distribuciones iniciales vagas. Calcula los indicadores de ajuste $DIC$ y $Pseudo~R^2$. Encuentra los estimadores puntuales y por intervalo de los parámetros del modelo, interprétalos y comenta qué tan bueno es el modelo.**
+
+
+```{r, include=FALSE, echo=FALSE}
+# Definimos los datos
+n  <- nrow(datos)
+data <- list("n"=n, "y"=datos$Y, "C"=datos$C, "x20"=datos$x20,
+             "x50"=datos$x50, "x100"=datos$x100, "x200"=datos$x200,
+             "x500"=datos$x500)
+
+# Valores iniciales
+inits <- function() {
+  list("alpha"=0, "beta"=rep(0, 5))
+}
+
+# Paramétros a monitorear
+params <- c("alpha", "alpha.est", "beta", "beta.est", "tasa", "yf")
+
+# Modelo
+n_iter <- 120000
+ej.binom_logit <- jags(data=data, inits=inits, parameters=params,
+                 model.file="./jags/logit.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Pseudo R^2
+inits_nulo <- function() list(alpha = 0)
+params_nulo <- c("alpha")
+data_nulo <- list("n"=n, "y"=datos$Y, "C"=datos$C)
+ej.binom_logit_nulo <- jags(data=data_nulo, inits=inits_nulo, parameters=params_nulo,
+                 model.file="./jags/logit_nulo.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+
+DIC_logit <- ej.binom_logit$BUGSoutput$DIC
+DIC_logit_nulo <- ej.binom_logit_nulo$BUGSoutput$DIC
+
+logL_modelo <- -0.5 * DIC_logit
+logL_nulo   <- -0.5 * DIC_logit_nulo
+
+pseudoR2 <- 1 - (logL_modelo / logL_nulo)
+```
+
+La Tabla 1 muestra el resumen de la estimación usando 120 mil iteraciones, con un burn-in del 20% y un thinning de 1, monitoreando dos cadenas por parámetro. Los resultados indican que el modelo tiene un buen ajuste, ya que el valor de $DIC$ es menor al del modelo nulo y el $Pseudo~R^2$ es cercano 0.5612. Sin embargo, el coeficiente de $\beta_5$ no es estadísticamente significativo.
+
+Al imponer una restricción de estimabilidad en la que la suma de las $\beta_i$ es cero, el intercepto $\alpha$ se interpreta como el logit de la probabilidad promedio de que un billete sea falso, sin importar la denominación. Por su parte, cada coeficiente $\beta_i$ se interpreta como la desviación en la escala logit de la probabilidad promedio de que un billete en circulación sea falso dada la denominación. Dicho lo anterior, para calcular las probabilidades de que un billete de una denominación dada sea falso debemos realizar la siguiente transformación:
+
+$$\pi_i = \frac{e^{\alpha+\beta_i}}{1+e^{\alpha+\beta_i}}$$
+
+
+```{r, echo=FALSE}
+coefs_logit_media <- c(
+  mean(ej.binom_logit$BUGSoutput$sims.list$alpha.est),
+  apply(ej.binom_logit$BUGSoutput$sims.list$beta.est, 2, mean)
+) 
+
+coefs_logit_2_5 <- c(
+  quantile(ej.binom_logit$BUGSoutput$sims.list$alpha.est, 0.025),
+  apply(ej.binom_logit$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.025))
+)
+
+coef_logit_97_5 <- c(
+  quantile(ej.binom_logit$BUGSoutput$sims.list$alpha.est, 0.975),
+  apply(ej.binom_logit$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.975))
+)
+
+
+resultados <- data.frame(
+  "Parámetro" = c("alpha", "beta_1", "beta_2", "beta_3", "beta_4", "beta_5"),
+  "Media posterior" = coefs_logit_media,
+  "Percentil 2.75%" = coefs_logit_2_5 ,
+  "Percenrtil 97.5%" = coef_logit_97_5
+)
+
+deviance <- ej.binom_logit$BUGSoutput$deviance
+
+resultados <- bind_rows(resultados, data.frame(
+  "Parámetro" = c("DIC", "Pseudo R^2"),
+  "Media posterior" = c(ej.binom_logit$BUGSoutput$DIC, pseudoR2),
+  "Percentil 2.75%" = NA,
+  "Percenrtil 97.5%" = NA
+  )
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+gt(resultados) |>
+  tab_header(title = "Tabla 1. Resultados del modelo de regresión binomial con liga logística") |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom"),
+      color = "black",
+      weight = px(1)
+    ),
+    locations = cells_body(
+      rows = Parámetro %in% c("DIC", "Pseudo R^2")
+    )
+  )
+
+```
+
+**c) En el modelo de regresión binomial con liga logística, interpreta todos los coeficientes de tu modelo.**
+
+La Tabla 2 muestra los valores de los coeficientes del modelo de regresión binomial con liga logística, así como las probabilidades. La interpretación de los coeficientes es la siguiente:
+
+   - i. Sin importar la denominación, la probabilidad promedio de que un billete sea falso es de 0.0133.
+   - ii. El coeficiente del billete de 20 pesos es negativo, lo que implica una menor probabilidad de falsificación en comparación con el promedio. La probabilidad es de 0.0019, menos de una quinta parte que la probabilidad promedio.
+   - iii. El coeficiente del billete de 50 pesos es positivo, lo que implica una mayor probabilidad de falsificación en comparación con el promedio. La probabilidad es de 0.0375, 2.8 veces la probabilidad promedio.
+   - iv. El coeficiente del billete de 100 pesos es positivo, lo que implica una mayor probabilidad de falsificación en comparación con el promedio. La probabilidad es de 0.0238, 1.8 veces la probabilidad promedio.
+   - v. El coeficiente del billete de 200 pesos es positivo, lo que implica una mayor probabilidad de falsificación en comparación con el promedio. La probabilidad es de 0.0167, 1.25 veces la probabilidad promedio.
+   - vi. El coeficiente del billete de 500 pesos es positivo, lo que implica una mayor probabilidad de falsificación en comparación con el proomedio. La probabilidad de que un billete de 500 pesos sea falso es de 0.0143, casi la misma que la probabilidad promedio.
+
+```{r, echo=FALSE}
+logits_medias <- c(
+  coefs_logit_media[1],
+  coefs_logit_media[1] + coefs_logit_media[2],  # x20
+  coefs_logit_media[1] + coefs_logit_media[3],  # x50
+  coefs_logit_media[1] + coefs_logit_media[4],  # x100
+  coefs_logit_media[1] + coefs_logit_media[5],  # x200
+  coefs_logit_media[1] + coefs_logit_media[6]   # x500
+)
+
+probs_media_logit <- exp(logits_medias) / (1 + exp(logits_medias))
+
+interpretacion <- data.frame(
+  "Denominación" = c("Cualquiera", "20", "50", "100", "200", "500"),
+  "Coeficiente" = coefs_logit_media,
+  "Probabilidad" = probs_media_logit,
+  "Razón respecto al promedio" = probs_media_logit / probs_media_logit[1]
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+gt(interpretacion) |>
+  tab_header(title = "Tabla 2. Interpretación de los resultados del modelo de regresión binomial con liga logística")
+```
+
+**d) En el modelo de regresión binomial con liga logística define “la tasa de billetes falsos por mil circulando” para cada denominación como $1000p_j$, con $p_j$ = proporción de billetes falsos para cada denominación $j=1,2,…,5,$ donde $j=1$  corresponde al billete de $20, $j=1$ al billete de $50, etc. Nota que $p_j$ debe de estar definido en términos de la liga y de los parámetros de tu modelo. Estima estas tasas mediante un intervalo de 95% de probabilidad y coméntalas.**
+
+Es posible calcular la probabilidad de que un billete sea falso para cada denominación, dada la liga logística y los coeficientes estimados. Usando esta información podemos calcular la tasa de billetes falsos por cada mil billetes en circulación para cada denominación, así como sus intervalos de probabilidad del 95% de la siguiente forma:
+
+$$\#~de~billetes~falsos~por~cada~mil~billetes~en~circulación = 100 * \frac{e^{\alpha+\beta_{j,i}}}{1+e^{\alpha+\beta_{j,i}}},~j = 1,...5,~i=\{2.5\%\,,~media,~97.5\%\}$$
+
+La Tabla 3 muestra la tasa de billetes falsos por cada mil billetes en circulación para cada denominación. De acuerdo con la información presentada, en promedio:
+
+  - Existen 1.9 billetes falsos de 20 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 37.5 billetes falsos de 50 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 20.9 billetes falsos de 100 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 16.7 billetes falsos de 200 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 14.3 billetes falsos de 500 pesos por cada mil billetes en circulación de esta denominación.
+
+```{r, echo=FALSE}
+
+tasa_media <- apply(ej.binom_logit$BUGSoutput$sims.list$tasa, 2, mean)
+tasa_2_5 <- apply(ej.binom_logit$BUGSoutput$sims.list$tasa, 2, function(x) quantile(x, 0.025))
+tasa_97_5 <- apply(ej.binom_logit$BUGSoutput$sims.list$tasa, 2, function(x) quantile(x, 0.975))
+
+tasas <- data.frame(
+  "Denominación" = c("20 pesos", "50 pesos", "100 pesos", "200 pesos", "500 pesos"),
+  "Percentil 2.5%" = tasa_2_5,
+  "Media" = tasa_media,
+  "Percentil 97.5%" = tasa_97_5
+) |>
+  mutate(across(where(is.numeric), ~round(., 1)))
+
+
+gt(tasas) |>
+  tab_header(title = "Tabla 3. Número de billetes falsos por cada mil billetes en circulación")
+```
+**e) Ajuste el modelo de regresión binomial con liga complementaria $log-log$, i.e., $log{-log(1-\pi_i)} = \eta_i$ y usa también distribuciones iniciales vagas para todos los parámetros del modelo. Calcula los indicadores de ajuste $DIC$ y $pseudo R^2$. Encuentra los estimadores puntuales y por intervalo de los parámetros del modelo, interprétalos y comenta qué tan bueno es el modelo.**
+
+
+```{r, echo=FALSE, include=FALSE}
+# Modelo
+ej.binom_loglog <- jags(data=data, inits=inits, parameters=params,
+                 model.file="./jags/cloglog.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+
+ej.binom_loglog_nulo <- jags(data=data_nulo, inits=inits_nulo, parameters=params_nulo,
+                 model.file="./jags/cloglog_nulo.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+
+DIC_clog <- ej.binom_loglog$BUGSoutput$DIC
+DIC_clog_nulo <- ej.binom_loglog_nulo$BUGSoutput$DIC
+
+logL_modelo_clog <- -0.5 * ej.binom_loglog$BUGSoutput$DIC
+logL_nulo_clog   <- -0.5 * ej.binom_loglog_nulo$BUGSoutput$DIC
+
+pseudoR2_clog <- 1 - (logL_modelo_clog / logL_nulo_clog)
+```
+
+La Tabla 4 muestra los resultados de la estimación del modelo binomial con liga complementaria log-log y se observa que el modelo tiene un ajuste comparable al modelo con liga logística, ya que el valor de $DIC$ y el $Pseudo~R^2$ son similares. Respecto a los coeficientes, estos también son similares y esto es esperado, dado que nuestro conjunto de datos contiene probabilidades pequeñas, donde ambas ligas se comportan de manera similar. Sin embargo, los coeficientes se interpretan de la siguiente manera:
+
+  - Bajo la condición de estimabilidad cada coeficiente $\beta_i$ representa un cambio en la transformación complementaria log-log para la denominación $j$, con respecto al promedio de todas las denominaciones. Si el coeficiente es positivo, entonces implica un mayor riesgo de falsificación y viceversa.
+  
+
+
+```{r, echo=FALSE}
+coefs_media_clog <- c(
+  mean(ej.binom_loglog$BUGSoutput$sims.list$alpha.est),
+  apply(ej.binom_loglog$BUGSoutput$sims.list$beta.est, 2, mean)
+)
+
+coefs_2_5_clog <- c(
+  quantile(ej.binom_loglog$BUGSoutput$sims.list$alpha.est, 0.025),
+  apply(ej.binom_loglog$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.025))
+)
+
+coefs_97_5_clog <- c(
+  quantile(ej.binom_loglog$BUGSoutput$sims.list$alpha.est, 0.975),
+  apply(ej.binom_loglog$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.975))
+)
+
+
+resultados_clog <- data.frame(
+  "Parámetro" = c("alpha", "beta_1", "beta_2", "beta_3", "beta_4", "beta_5"),
+  "Media posterior" = coefs_media_clog,
+  "Percentil 2.75%" = coefs_2_5_clog,
+  "Percenrtil 97.5%" = coefs_97_5_clog
+)
+
+resultados_clog <- bind_rows(resultados_clog, data.frame(
+  "Parámetro" = c("DIC", "Pseudo R^2"),
+  "Media posterior" = c(ej.binom_loglog$BUGSoutput$DIC, pseudoR2_clog),
+  "Percentil 2.75%" = NA,
+  "Percenrtil 97.5%" = NA
+  )
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+gt(resultados_clog) |>
+  tab_header(title = "Tabla 4. Resultados del modelo de regresión binomial con liga complementaria log-log") |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom"),
+      color = "black",
+      weight = px(1)
+    ),
+    locations = cells_body(
+      rows = Parámetro %in% c("DIC", "Pseudo R^2")
+    )
+  )
+```
+
+**f) En el modelo de regresión binomial con liga complementaria log-log, interpreta todos los coeficientes de tu modelo.**
+
+La Tabla 5 muestra los valores de los coeficientes del modelo de regresión binomial con liga complementaria log-log, así como las probabilidades. La interpretación de los coeficientes es la siguiente:
+
+   - i. Sin importar la denominación, la probabilidad promedio de que un billete sea falso es de 0.0133.
+   - ii. El coeficiente del billete de 20 pesos es negativo, lo que implica el menor riesgo de falsificación en comparación con el promedio. La probabilidad es de 0.0020 menos de una séptima. parte de la probabilidad promedio.
+   - iii. El coeficiente del billete de 50 pesos es positivo y es el mayor, lo que implica que este billete está en mayor riesgo de ser falsificado en comparación con el promedio. La probabilidad es de 0.0375, 2.8 veces la probabilidad promedio.
+   - iv. El coeficiente del billete de 100 pesos es positivo, lo que implica también un mayor riesgo de ser falsificado en comparación con el promedio. La probabilidad es de 0.0238, 1.8 veces la probabilidad promedio.
+   - v. El coeficiente del billete de 200 pesos es positivo, lo que implica  un mayor riesgo de ser falsificado en comparación con el promedio. La probabilidad es de 0.0167, 1.25 veces la probabilidad promedio.
+   - vi. El coeficiente del billete de 500 pesos es positivo, lo que implica un mayor riesgo de falsificación en comparación con el proomedio. La probabilidad es de 0.0143, casi la misma que la probabilidad promedio.
+
+
+
+
+
+
+```{r, echo=FALSE}
+logs_medias_clog <- c(
+  coefs_media_clog[1],
+  coefs_media_clog[1] + coefs_media_clog[2],  # x20
+  coefs_media_clog[1] + coefs_media_clog[3],  # x50
+  coefs_media_clog[1] + coefs_media_clog[4],  # x100
+  coefs_media_clog[1] + coefs_media_clog[5],  # x200
+  coefs_media_clog[1] + coefs_media_clog[6]   # x500
+)
+
+probs_media_clog <- 1- exp(-exp(logs_medias_clog))
+
+interpretacion_clog <- data.frame(
+  "Denominación" = c("Cualquiera", "20", "50", "100", "200", "500"),
+  "Coeficiente" = coefs_media_clog,
+  "Probabilidad" = probs_media_clog,
+  "Razón respecto al promedio" = probs_media_clog / probs_media_clog[1]
+) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+gt(interpretacion_clog) |>
+  tab_header(title = "Tabla 5. Interpretación de los resultados del modelo de regresión binomial con liga complementaria log-log") 
+```
+
+
+
+
+
+**g) En el modelo de regresión binomial con liga complementaria log-log define “la tasa de billetes falsos por mil circulando” para cada denominación como $1000p_j$, con $p_j$ = proporción de billetes falsos para cada denominación $j=1,2,…,5,$ donde $j=1$  corresponde al billete de $20, $j=1$ al billete de $50, etc. Nota que $p_j$ debe de estar definido en términos de la liga y de los parámetros de tu modelo. Estima estas tasas mediante un intervalo de 95% de probabilidad y coméntalas.**
+
+Es posible calcular la probabilidad de que un billete sea falso para cada denominación, dada la liga complementaria log-log con ayuda de los coeficientes estimados. Usando esta información podemos calcular la tasa de billetes falsos por cada mil billetes en circulación para cada denominación, así como sus intervalos de probabilidad del 95% de la siguiente forma:
+
+$$\#~de~billetes~falsos~por~cada~mil~billetes~en~circulación = 100 * (1-\exp(-exp(\alpha+\beta_i)) ),~j = 1,...5,~i=\{2.5\%\,,~media,~97.5\%\}$$
+
+La Tabla 3 muestra la tasa de billetes falsos por cada mil billetes en circulación para cada denominación. De acuerdo con la información presentada, en promedio:
+
+  - Existen 2.0 billetes falsos de 20 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 37.5 billetes falsos de 50 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 23.8 billetes falsos de 100 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 16.7 billetes falsos de 200 pesos por cada mil billetes en circulación de esta denominación.
+  - Existen 14.3 billetes falsos de 500 pesos por cada mil billetes en circulación de esta denominación.
+
+
+```{r, echo=FALSE}
+tasa_media_clog <- apply(ej.binom_loglog$BUGSoutput$sims.list$tasa, 2, mean)
+tasa_2_5_clog <- apply(ej.binom_loglog$BUGSoutput$sims.list$tasa, 2, function(x) quantile(x, 0.025))
+tasa_97_5_clog <- apply(ej.binom_loglog$BUGSoutput$sims.list$tasa, 2, function(x) quantile(x, 0.975))
+
+tasas_clog <- data.frame(
+  "Denominación" = c("20 pesos", "50 pesos", "100 pesos", "200 pesos", "500 pesos"),
+  "Percentil 2.5%" = tasa_2_5_clog,
+  "Media" = tasa_media_clog,
+  "Percentil 97.5%" = tasa_97_5_clog
+) |>
+  mutate(across(where(is.numeric), ~round(., 1)))
+
+gt(tasas_clog) |>
+  tab_header(title = "Tabla 6. Número de billetes falsos por cada mil billetes en circulación")
+
+```
+
+**h) Compara los modelos de regresión binomial con las dos ligas, logística y complementaria log-log. De acuerdo con sus medidas de ajuste determina cuál de los dos es el mejor. Con el mejor modelo realiza una gráfica de predicción del número de billetes falsos y compáralo con los datos observados. Comenta los puntos importantes de esta gráfica. En particular comenta sobre los billetes de $20 y de $50.**
+
+De acuerdo con los resultados del $DIC$ y el $Pseudo~R^2$, no es posible determinor el mejor modelo basado en estos valores. Con lo anterior, elegimos el modelo logit debido a que su interpretabilidad es más sencilla.
+
+```{r, echo=FALSE}
+# Tabla con DIC y Pseudo R^2
+resultados_modelos <- data.frame(
+  "Modelo" = c("Logística", "Complementaria log-log"),
+  "DIC" = c(DIC_logit, DIC_clog),
+  "Pseudo R^2" = c(pseudoR2, pseudoR2_clog)
+) |>
+  mutate(across(where(is.numeric), ~round(., 2)))
+
+gt(resultados_modelos) |>
+  tab_header(title = "Tabla 7. Comparación de los modelos de regresión binomial con liga logística y complementaria log-log")
+```
+
+El Gráfico 4 muestra la predicción del número de billetes falsos en circulación para cada denominación, comparado con los datos observados. Se observa que el modelo logit predice de manera adecuada el número de billetes falsos en circulación para los billetes de mayor denominación (100, 200 y 500 pesos). 
+
+```{r grafico4, fig.cap="Valores reales y predichos para todas las denominaciones", fig.width=5, fig.height=3, echo=FALSE}
+# Predicción
+datos$predicciones_logit <- apply(ej.binom_logit$BUGSoutput$sims.list$yf, 2, mean)
+
+# scatterplot
+g1 <- ggplot(datos, aes(x = Y, y = predicciones_logit, color = factor(denom))) +
+  geom_point(size=2) + geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(x = "Billetes falsos observados", y = "Billetes falsos predichos") +
+  theme_minimal()
+
+g1
+
+
+```
+
+
+Sin embargo, las predicciones para los billetes de denominaciones de 20 y 50 pesos no son tan precisas, ya que el modelo logit sobrestima la mayoría de observacviones del número de billetes falsos en circulación para los billetes de 20 pesos y tiende a sobrestimar algunas observaciones de los billetes de 50 pesos y a subestimar algunas otras (Gráfica 5).
+
+
+```{r grafico5, fig.cap="Valores reales y predichos para billetes de 20 y 50 pesos", fig.width=12, fig.height=6, echo=FALSE}
+g2 <- ggplot(datos |> filter(denom %in% c(20)), aes(x = Y, y = predicciones_logit)) +
+  geom_point(size=2, color="firebrick") + geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(x = "Billetes falsos observados", y = "Billetes falsos predichos", title="Denominación de 20 pesos") +
+  theme_minimal()
+
+g3 <- ggplot(datos |> filter(denom %in% c(50)), aes(x = Y, y = predicciones_logit)) +
+  geom_point(size=2, color="blue") + geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  labs(x = "Billetes falsos observados", y = "Billetes falsos predichos", title = "Denominación de 50 pesos" ) +
+  theme_minimal()
+
+(g2 + g3)
+```
+
+**i) Con el mejor modelo, compara las estimaciones de “las tasas de billetes falsos por mil circulando” para las cinco denominaciones. Determina cuales de ellas son estadísticamente diferentes justificando tu respuesta con las estimaciones obtenidas.**
+
+Para que las tasas de billetes falsos por cada mil billetes en circulación sean estadísticamente diferentes, los intervalos de probabilidad del 95% no deben traslaparse para indicar que con alta probabilidad las tasas verdaderas difieren entre sí. Lo anterior debe cumplirse debido a que cada denominación es un grupo independiente y no se espera que las tasas de billetes falsos sean iguales entre las denominaciones. Como señalan Gelman et al. (2013), \cite{gelman2013bayesian} “ El traslape general en los intervalos posteriores basados en análisis independientes sugiere que todos los experimentos podrían estar estimando la misma cantidad”.
+
+
+```{r}
+tasas_sum <- tasas |> select(c("Denominación", "Percentil.2.5.", "Percentil.97.5."))
+
+gt(tasas_sum) |>
+  tab_header(title = "Tabla 8. Intervalos de credibilidad el número de billetes falsos por cada mil billetes en circulación")
+```
+
+
+**Adicional al modelo de regresión binomial, podrías haber usado otro modelo para ajustar estos datos. Escribe cuál sería tu selección de modelo alternativo definiendo la verosimilitud y la función liga. Ajusta tu nueva propuesta de modelado, compara con los dos modelos anteriores y comenta.**
+
+Debido a que tenemos datos de conteo, una alternativa al modelo de regresión binomial es el modelo de Poisson. La verosimilitud de este modelo es:
+
+$$L(\theta) = \prod_{i=1}^n \frac{e^{-\lambda_i}\lambda_i^{y_i}}{y_i!}$$
+
+y la función liga es la función logarítmica:
+
+$$\log(\lambda_i) = \alpha + \beta_1x20_i + \beta_2x50_i + \beta_3x100_i + \beta_4x200_i + \beta_5x500_i$$
+La Tabla 9 muestra los resultados de la estimación del modelo de Poisson.
+
+```{r, include=FALSE}
+# Definimos los datos
+C_denom <- with(datos, tapply(C, denom, sum))
+data_pois <- list("n"=n, "y"=datos$Y, "C"=datos$C, "x20"=datos$x20,
+             "x50"=datos$x50, "x100"=datos$x100, "x200"=datos$x200,
+             "x500"=datos$x500, "C_denom"=as.numeric(C_denom))
+
+
+# Modelo
+ej.poisson <- jags(data=data_pois, inits=inits, parameters=params,
+                 model.file="./jags/poisson.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+
+ej.poisson_nulo <- jags(data=data_nulo, inits=inits_nulo, parameters=params_nulo,
+                 model.file="./jags/poisson_nulo.txt", n.chains=2,
+                 n.iter=n_iter, n.burnin=0.2*n_iter, n.thin=1)
+
+dic_pois <- ej.poisson$BUGSoutput$DIC
+dic_pois_nulo <- ej.poisson_nulo$BUGSoutput$DIC
+
+logL_modelo_pois <- -0.5 * dic_pois
+logL_nulo_pois   <- -0.5 * dic_pois_nulo
+
+pseudoR2_pois <- 1 - (logL_modelo_pois / logL_nulo_pois)
+
+```
+
+Respecto a los coeficientes este caso los coeficientes se interpretan de la siguiente manera:
+
+  - Bajo la condición de estimabilidad cada coeficiente $\beta_i$ representa la diferencia relativa en escala logarítmica del número esperado de billetes falsos para la denominación $i$, con respecto al promedio de todas las denominaciones.
+
+```{r}
+coefs_media_pois <- c(
+  mean(ej.poisson$BUGSoutput$sims.list$alpha.est),
+  apply(ej.poisson$BUGSoutput$sims.list$beta.est, 2, mean)
+)
+
+coefs_2_5_pois <- c(
+  quantile(ej.poisson$BUGSoutput$sims.list$alpha.est, 0.025),
+  apply(ej.poisson$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.025))
+)
+
+coefs_97_5_pois <- c(
+  quantile(ej.poisson$BUGSoutput$sims.list$alpha.est, 0.975),
+  apply(ej.poisson$BUGSoutput$sims.list$beta.est, 2, function(x) quantile(x, 0.975))
+)
+
+resultados_pois <- data.frame(
+  "Parámetro" = c("alpha", "beta_1", "beta_2", "beta_3", "beta_4", "beta_5"),
+  "Media posterior" = coefs_media_pois,
+  "Percentil 2.75%" = coefs_2_5_pois,
+  "Percenrtil 97.5%" = coefs_97_5_pois
+) |>
+  bind_rows(data.frame(
+    "Parámetro" = c("DIC", "Pseudo R^2"),
+    "Media posterior" = c(dic_pois, pseudoR2_pois),
+    "Percentil 2.75%" = NA,
+    "Percenrtil 97.5%" = NA
+  )) |>
+  mutate(across(where(is.numeric), ~round(., 4)))
+
+gt(resultados_pois) |>
+  tab_header(title = "Tabla 9. Resultados del modelo de Poisson") |>
+  tab_style(
+    style = cell_borders(
+      sides = c("top", "bottom"),
+      color = "black",
+      weight = px(1)
+    ),
+    locations = cells_body(
+      rows = Parámetro %in% c("DIC", "Pseudo R^2")
+    )
+  )
+
+```
+
+
+Para una interpretabilidad, se puede realizar la transformación siguiente:
+
+$$\lambda_i = \exp(\alpha+\beta_{i})$$
+La Tabla 10 los $DIC$ y $Pseudo~R^2$ de los tres modelos.  Se observa que el modelo tiene un ajuste superior al modelo binomial con liga logística y complementaria log-log, ya que la $Pseudo~R^2$ es mayor que la de los otros dos modelos. 
+
+
+```{r}
+resultados_modelos_pois <- data.frame(
+  "Modelo" = c("Logística", "Complementaria log-log", "Poisson"),
+  "DIC" = c(DIC_logit, DIC_clog, dic_pois),
+  "Pseudo R^2" = c(pseudoR2, pseudoR2_clog, pseudoR2_pois)
+) |>
+  mutate(across(where(is.numeric), ~round(., 2)))
+
+gt(resultados_modelos_pois) |>
+  tab_header(title = "Tabla 10. Comparación de los modelos de regresión binomial con liga logística, complementaria log-log y Poisson")
+```
+
+
+## Apéndice
+
+Aquí se presentan el codigo de JAGS para los modelos de regresión binomial con liga logística y complementaria log-log, así como el modelo de Poisson. Para encontrar el codigo completo, se recomienda visitar el repo del [Texto que quieres mostrar](https://www.ejemplo.com).
+
+**Modelo binomial con liga logística**
+
+```{=latex}
+\begin{verbatim}
+# Código de JAGS para un modelo de regresión binomial con 
+# liga logística
+
+model {
+  # y: Número de billetes falsos
+  # C: Número de billetes en circulacion
+  # p: Probabilidad de que un billete sea falso (pi en el ejercicio)
+
+  # Verosimilitud
+  for (i in 1:n) {
+    y[i] ~ dbin(p[i], C[i])
+    
+    # Liga logística
+    logit(p[i]) <- alpha + 
+    beta[1]*x20[i] + 
+    beta[2]*x50[i] + 
+    beta[3]*x100[i] + 
+    beta[4]*x200[i] + 
+    beta[5]*x500[i]
+
+    # Predicción
+    yf[i] ~ dbin(p[i], C[i])
+  }
+
+  # Priors
+  # alpha
+  alpha ~ dnorm(0, 0.001)
+  
+  #beta
+  for (j in 1:5) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+
+  # tasa de falsificación
+  for(j in 1:5){
+    pi[j] <- exp(alpha.est + beta.est[j])
+    tasa[j] <- 1000 * pi[j] / (1 + pi[j])
+  }
+
+  # Restricciones de estimabilidad
+  alpha.est <- alpha + mean(beta[])
+  for (j in 1:5) {
+    beta.est[j] <- beta[j] - mean(beta[])
+  }
+
+}
+\end{verbatim}
+```
+
+**Modelo binomial con liga complementaria log-log**
+```{=latex}
+\begin{verbatim}
+# Código de JAGS para un modelo de regresión binomial con 
+# liga log-log: cloglog(p) = log(-log(1 - p))
+
+model {
+  # y: Número de billetes falsos
+  # C: Número de billetes en circulacion
+  # p: Probabilidad de que un billete sea falso (pi en el ejercicio)
+
+  # Verosimilitud
+  for (i in 1:n) {
+    y[i] ~ dbin(p[i], C[i])
+    
+    # Liga complementaria log-log
+    cloglog(p[i]) <- alpha + 
+        beta[1]*x20[i] + 
+        beta[2]*x50[i] + 
+        beta[3]*x100[i] + 
+        beta[4]*x200[i] + 
+        beta[5]*x500[i]
+    
+    # Predicción
+    yf[i] ~ dbin(p[i], C[i])
+  }
+
+  # Priors
+  # alpha
+  alpha ~ dnorm(0, 0.001)
+  # beta
+  for (j in 1:5) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+  # tasa de falsificación clog-log
+  for(j in 1:5){
+    pi[j] <- 1 - exp(-exp(alpha.est + beta.est[j]))
+    tasa[j] <- 1000 * pi[j]
+  }
+
+  # Restricciones de estimabilidad
+  alpha.est <- alpha + mean(beta[])
+  for (j in 1:5) {
+    beta.est[j] <- beta[j] - mean(beta[])
+  }
+
+}
+\end{verbatim}
+```
+
+**Modelo Poisson con liga logarítmica**
+
+```{=latex}
+\begin{verbatim}
+# Código de JAGS para un modelo de regresión poisson con 
+# liga logarítmica
+
+model {
+  # y: Número de billetes falsos
+  # C: Número de billetes en circulacion
+  # p: Probabilidad de que un billete sea falso (pi en el ejercicio)
+
+  # Verosimilitud
+  for (i in 1:n) {
+    y[i] ~ dpois(lambda[i])
+    
+    # Liga logarítmica
+    log(lambda[i]) <- alpha +
+      beta[1]*x20[i] +
+      beta[2]*x50[i] +
+      beta[3]*x100[i] +
+      beta[4]*x200[i] +
+      beta[5]*x500[i]
+
+    # Predicción
+    yf[i] ~ dpois(lambda[i])
+  }
+
+  # Priors
+  # alpha
+  alpha ~ dnorm(0, 0.001)
+  
+  #beta
+  for (j in 1:5) {
+    beta[j] ~ dnorm(0, 0.001)
+  }
+
+  # tasa de falsificación
+  for (j in 1:5) {
+  lambda_denom[j] <- exp(alpha.est + beta.est[j])
+  tasa[j] <- 1000 * lambda_denom[j] / C_denom[j]
+  }
+
+  # Restricciones de estimabilidad
+  alpha.est <- alpha + mean(beta[])
+  for (j in 1:5) {
+    beta.est[j] <- beta[j] - mean(beta[])
+  }
+}
+\end{verbatim}
+```

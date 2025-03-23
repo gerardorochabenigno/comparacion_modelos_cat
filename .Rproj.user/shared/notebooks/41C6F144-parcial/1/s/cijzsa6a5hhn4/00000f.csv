@@ -1,0 +1,1 @@
+"0","datos <- read.csv(""http://gente.itam.mx/lnieto/index_archivos/BillsMXc.csv"")"
